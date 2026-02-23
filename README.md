@@ -194,7 +194,7 @@ Chạy nhanh:
 
 ```bash
 # chạy dữ liệu real-time (cần internet)
-python3 tools/crypto_market_agent.py --currency usd --top 50 --strategy-limit 5 --quote usdt
+python3 tools/crypto_market_agent.py --currency usd --top 500 --strategy-limit 120 --quote usdt
 
 # xuất JSON để tích hợp bot/dashboard
 python3 tools/crypto_market_agent.py --currency vnd --top 100 --output json
@@ -217,7 +217,9 @@ python3 tools/crypto_market_web.py --host 0.0.0.0 --port 8765
 Mở trình duyệt tại: `http://localhost:8765`
 
 GUI hỗ trợ:
+- Form tối ưu cho phân tích diện rộng với Top Coin lớn
 - Chọn Demo mode (offline) hoặc Live API
 - Xem nhanh Market State + score
-- Card chiến lược theo cặp (ví dụ BTC/USDT): Buy/Sell, Entry, SL, TP1/TP2, RR
+- Quét cực nhiều coin (tối đa 1000) và xếp hạng theo confidence
+- Card chiến lược theo cặp (ví dụ BTC/USDT): Buy/Sell, Entry, SL, TP1/TP2, RR + lý do confidence
 

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Auto phân tích thị trường crypto (CLI) với chiến lược BUY/SELL + SL/TP.
 
-- Nguồn dữ liệu chính: CoinGecko public API.
-- Có chế độ --demo để chạy offline khi môi trường bị chặn outbound network.
-- Kết quả gồm market pulse và chiến lược giao dịch mẫu (không phải lời khuyên đầu tư).
+Nâng cấp:
+- Hỗ trợ quét rất nhiều coin bằng phân trang (nhiều page CoinGecko).
+- Confidence score chi tiết hơn (trend alignment, liquidity, volatility regime, market regime).
+- Xuất lý do confidence để người dùng hiểu vì sao tín hiệu mạnh/yếu.
 """
 
 from __future__ import annotations
@@ -22,6 +23,8 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 COINGECKO = "https://api.coingecko.com/api/v3"
+MAX_PER_PAGE = 250
+MAX_TOTAL_TOP = 1000
 
 
 @dataclass
@@ -54,6 +57,7 @@ class TradePlan:
     name: str
     side: str
     confidence: float
+    confidence_reasons: list[str]
     entry: float
     stop_loss: float
     take_profit_1: float
@@ -71,13 +75,14 @@ def clamp(value: float, low: float, high: float) -> float:
 def get_json(url: str, params: dict[str, Any] | None = None) -> Any:
     if params:
         url = f"{url}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers={"accept": "application/json", "user-agent": "crypto-market-agent/2.0"})
+    req = urllib.request.Request(url, headers={"accept": "application/json", "user-agent": "crypto-market-agent/3.0"})
     with urllib.request.urlopen(req, timeout=30) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
 def demo_market_data() -> list[CoinSnapshot]:
-    return [
+    # Dữ liệu demo mở rộng để test UI nhiều coin.
+    base = [
         CoinSnapshot("BTC", "Bitcoin", 95000, 1.85e12, 1, 2.3, 8.5, 4.1e10),
         CoinSnapshot("ETH", "Ethereum", 5100, 6.4e11, 2, 1.8, 7.2, 2.5e10),
         CoinSnapshot("BNB", "BNB", 820, 1.2e11, 5, 0.9, 4.0, 1.8e9),
@@ -89,26 +94,21 @@ def demo_market_data() -> list[CoinSnapshot]:
         CoinSnapshot("DOT", "Polkadot", 9.4, 1.5e10, 15, -2.8, -4.2, 7.1e8),
         CoinSnapshot("LINK", "Chainlink", 27.5, 1.7e10, 14, 2.0, 6.6, 8.2e8),
     ]
+    synthetic: list[CoinSnapshot] = []
+    for i in range(11, 221):
+        ch24 = ((i % 13) - 6) * 0.7
+        ch7 = ((i % 17) - 8) * 1.2
+        price = max(0.02, 20 - i * 0.05)
+        mcap = max(5e7, 4e9 - i * 1.6e7)
+        vol = max(8e6, 6e8 - i * 2e6)
+        synthetic.append(CoinSnapshot(f"ALT{i}", f"Altcoin {i}", price, mcap, i, ch24, ch7, vol))
+    return base + synthetic
 
 
-def fetch_market_data(vs_currency: str, per_page: int, use_demo: bool = False) -> list[CoinSnapshot]:
-    if use_demo:
-        return demo_market_data()[:per_page]
-
-    data = get_json(
-        f"{COINGECKO}/coins/markets",
-        {
-            "vs_currency": vs_currency,
-            "order": "market_cap_desc",
-            "per_page": per_page,
-            "page": 1,
-            "sparkline": "false",
-            "price_change_percentage": "24h,7d",
-        },
-    )
-    snapshots: list[CoinSnapshot] = []
+def _map_market_items(data: list[dict[str, Any]]) -> list[CoinSnapshot]:
+    out: list[CoinSnapshot] = []
     for item in data:
-        snapshots.append(
+        out.append(
             CoinSnapshot(
                 symbol=item.get("symbol", "").upper(),
                 name=item.get("name", "Unknown"),
@@ -120,7 +120,35 @@ def fetch_market_data(vs_currency: str, per_page: int, use_demo: bool = False) -
                 volume_24h=float(item.get("total_volume") or 0.0),
             )
         )
-    return snapshots
+    return out
+
+
+def fetch_market_data(vs_currency: str, per_page: int, use_demo: bool = False) -> list[CoinSnapshot]:
+    limit = max(1, min(per_page, MAX_TOTAL_TOP))
+    if use_demo:
+        return demo_market_data()[:limit]
+
+    all_items: list[CoinSnapshot] = []
+    page = 1
+    while len(all_items) < limit:
+        batch_size = min(MAX_PER_PAGE, limit - len(all_items))
+        data = get_json(
+            f"{COINGECKO}/coins/markets",
+            {
+                "vs_currency": vs_currency,
+                "order": "market_cap_desc",
+                "per_page": batch_size,
+                "page": page,
+                "sparkline": "false",
+                "price_change_percentage": "24h,7d",
+            },
+        )
+        if not data:
+            break
+        all_items.extend(_map_market_items(data))
+        page += 1
+
+    return all_items[:limit]
 
 
 def compute_pulse(coins: list[CoinSnapshot]) -> MarketPulse:
@@ -138,7 +166,6 @@ def compute_pulse(coins: list[CoinSnapshot]) -> MarketPulse:
 
     trend_score = clamp(50 + avg_24h * 2 + avg_7d * 0.8, 0, 100)
     volatility_score = clamp(100 - stdev_24h * 4, 0, 100)
-    # Thanh khoản thường dao động thấp theo tỷ lệ volume/marketcap, scale tuyến tính để dễ đọc hơn.
     liquidity_score = clamp(volume_ratio * 600, 0, 100)
     breadth_score = clamp((advancers / len(coins)) * 100, 0, 100)
     return MarketPulse(trend_score, volatility_score, liquidity_score, breadth_score)
@@ -177,45 +204,90 @@ def signal_side(coin: CoinSnapshot, pulse: MarketPulse) -> str:
     return "BUY"
 
 
+def confidence_engine(coin: CoinSnapshot, pulse: MarketPulse, side: str) -> tuple[float, list[str]]:
+    reasons: list[str] = []
+    score = 50.0
+
+    trend_align = coin.price_change_7d_pct >= 0 if side == "BUY" else coin.price_change_7d_pct < 0
+    if trend_align:
+        score += 10
+        reasons.append("Trend 7d đồng thuận với hướng lệnh (+10)")
+    else:
+        score -= 8
+        reasons.append("Trend 7d chưa đồng thuận với hướng lệnh (-8)")
+
+    intraday_align = coin.price_change_24h_pct >= 0 if side == "BUY" else coin.price_change_24h_pct < 0
+    if intraday_align:
+        score += 8
+        reasons.append("Momentum 24h ủng hộ setup (+8)")
+    else:
+        score -= 7
+        reasons.append("Momentum 24h đi ngược setup (-7)")
+
+    if pulse.total >= 60 and side == "BUY":
+        score += 8
+        reasons.append("Market regime tích cực cho vị thế BUY (+8)")
+    elif pulse.total <= 45 and side == "SELL":
+        score += 8
+        reasons.append("Market regime tiêu cực cho vị thế SELL (+8)")
+    else:
+        score -= 2
+        reasons.append("Market regime trung tính/không tối ưu (-2)")
+
+    vol_ratio = coin.volume_24h / max(coin.market_cap, 1)
+    if vol_ratio > 0.08:
+        score += 7
+        reasons.append("Thanh khoản tương đối cao, khớp lệnh tốt (+7)")
+    elif vol_ratio < 0.01:
+        score -= 6
+        reasons.append("Thanh khoản thấp, rủi ro trượt giá (-6)")
+
+    vol = volatility_proxy(coin)
+    if vol <= 4:
+        score += 5
+        reasons.append("Biến động vừa phải, dễ quản trị SL (+5)")
+    elif vol >= 10:
+        score -= 5
+        reasons.append("Biến động cao, xác suất quét SL lớn (-5)")
+
+    if (coin.market_cap_rank or 9999) <= 30:
+        score += 4
+        reasons.append("Coin vốn hóa lớn, độ ổn định tương đối tốt (+4)")
+
+    return clamp(score, 15, 95), reasons
+
+
 def build_trade_plan(coin: CoinSnapshot, pulse: MarketPulse) -> TradePlan:
     side = signal_side(coin, pulse)
     vol = volatility_proxy(coin)
-    vol_factor = clamp(vol / 100, 0.015, 0.14)
+    vol_factor = clamp(vol / 100, 0.015, 0.16)
 
     if side == "BUY":
         entry = coin.current_price * (1 - vol_factor * 0.25)
         stop_loss = entry * (1 - vol_factor * 1.2)
         take_profit_1 = entry * (1 + vol_factor * 1.8)
-        take_profit_2 = entry * (1 + vol_factor * 3.0)
+        take_profit_2 = entry * (1 + vol_factor * 3.2)
         invalidation = "Giá đóng nến H4 dưới SL hoặc volume giảm mạnh trong nhịp hồi."
         note = "Ưu tiên vào lệnh theo từng phần 40%/30%/30%, dời SL về hòa vốn sau khi chạm TP1."
     else:
         entry = coin.current_price * (1 + vol_factor * 0.25)
         stop_loss = entry * (1 + vol_factor * 1.2)
         take_profit_1 = entry * (1 - vol_factor * 1.8)
-        take_profit_2 = entry * (1 - vol_factor * 3.0)
+        take_profit_2 = entry * (1 - vol_factor * 3.2)
         invalidation = "Giá đóng nến H4 trên SL hoặc market breadth cải thiện đột biến."
         note = "Giảm khối lượng short khi funding dương cao; ưu tiên chốt từng phần tại TP1/TP2."
 
     risk = abs(entry - stop_loss)
     rr1 = abs(take_profit_1 - entry) / risk if risk else 0.0
     rr2 = abs(take_profit_2 - entry) / risk if risk else 0.0
-
-    trend_alignment = 1 if (coin.price_change_7d_pct >= 0 and side == "BUY") or (coin.price_change_7d_pct < 0 and side == "SELL") else 0
-    confidence = clamp(
-        45
-        + (pulse.total - 50) * (0.8 if side == "BUY" else -0.5)
-        + trend_alignment * 8
-        + (coin.price_change_24h_pct * (1.2 if side == "BUY" else -1.2)),
-        20,
-        90,
-    )
+    confidence, reasons = confidence_engine(coin, pulse, side)
 
     return TradePlan(
         symbol=coin.symbol,
         name=coin.name,
         side=side,
         confidence=confidence,
+        confidence_reasons=reasons,
         entry=entry,
         stop_loss=stop_loss,
         take_profit_1=take_profit_1,
@@ -230,7 +302,8 @@ def build_trade_plan(coin: CoinSnapshot, pulse: MarketPulse) -> TradePlan:
 def generate_trade_plans(coins: list[CoinSnapshot], pulse: MarketPulse, limit: int) -> list[TradePlan]:
     ranked = sorted(coins, key=lambda c: (c.market_cap_rank or 9999, -c.volume_24h))
     selected = ranked[: max(1, limit)]
-    return [build_trade_plan(c, pulse) for c in selected]
+    plans = [build_trade_plan(c, pulse) for c in selected]
+    return sorted(plans, key=lambda p: p.confidence, reverse=True)
 
 
 def format_coin_line(coin: CoinSnapshot, currency: str, quote_asset: str) -> str:
@@ -256,6 +329,7 @@ def generate_report(coins: list[CoinSnapshot], currency: str, strategy_limit: in
     lines.append(f"# Crypto Market Brief ({now})")
     lines.append("")
     lines.append(f"Tổng điểm thị trường: **{pulse.total:.1f}/100** - {classify_market(pulse.total)}")
+    lines.append(f"Phạm vi phân tích: **{len(coins)} coin**")
     lines.append("")
     lines.append("## Điểm thành phần")
     lines.append(f"- Trend score: {pulse.trend_score:.1f}")
@@ -274,7 +348,7 @@ def generate_report(coins: list[CoinSnapshot], currency: str, strategy_limit: in
         lines.append(format_coin_line(c, currency, quote_asset))
     lines.append("")
 
-    lines.append("## Chiến lược BUY/SELL + SL/TP (tự động)")
+    lines.append("## Chiến lược BUY/SELL + SL/TP (xếp hạng theo confidence)")
     for idx, plan in enumerate(plans, start=1):
         lines.append(f"### {idx}) {plan.name} ({plan.symbol}/{quote_asset.upper()}) — {plan.side} | Confidence: {plan.confidence:.1f}/100")
         lines.append(f"- Entry tham chiếu: **{fmt_price(plan.entry)} {currency.upper()}**")
@@ -283,6 +357,7 @@ def generate_report(coins: list[CoinSnapshot], currency: str, strategy_limit: in
             f"- Take-profit (TP): **TP1 {fmt_price(plan.take_profit_1)}** | **TP2 {fmt_price(plan.take_profit_2)}** {currency.upper()}"
         )
         lines.append(f"- Risk/Reward: TP1 = {plan.risk_reward_tp1:.2f}R | TP2 = {plan.risk_reward_tp2:.2f}R")
+        lines.append(f"- Lý do confidence: {'; '.join(plan.confidence_reasons[:3])}")
         lines.append(f"- Điều kiện vô hiệu setup: {plan.invalidation}")
         lines.append(f"- Kế hoạch quản trị lệnh: {plan.note}")
         lines.append("")
@@ -299,8 +374,8 @@ def generate_report(coins: list[CoinSnapshot], currency: str, strategy_limit: in
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Auto phân tích thị trường crypto + chiến lược BUY/SELL/SL/TP.")
     parser.add_argument("--currency", default="usd", help="Đơn vị giá, ví dụ: usd, vnd, eur")
-    parser.add_argument("--top", type=int, default=50, help="Số lượng coin top market cap để phân tích")
-    parser.add_argument("--strategy-limit", type=int, default=5, help="Số coin xuất chiến lược giao dịch")
+    parser.add_argument("--top", type=int, default=200, help="Số lượng coin top market cap để phân tích (tối đa 1000)")
+    parser.add_argument("--strategy-limit", type=int, default=30, help="Số coin xuất chiến lược giao dịch")
     parser.add_argument("--output", choices=["markdown", "json"], default="markdown", help="Định dạng đầu ra")
     parser.add_argument("--quote", default="usdt", help="Quote asset hiển thị cặp giao dịch, ví dụ: usdt")
     parser.add_argument("--demo", action="store_true", help="Dùng dữ liệu mẫu offline (không gọi API)")
@@ -325,6 +400,7 @@ def main() -> int:
             "currency": args.currency,
             "market_state": classify_market(pulse.total),
             "quote_asset": args.quote.upper(),
+            "analyzed_coins": len(coins),
             "pulse": asdict(pulse),
             "trade_plans": [asdict(p) for p in plans],
             "coins": [asdict(c) for c in coins],

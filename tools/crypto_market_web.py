@@ -51,8 +51,8 @@ class CryptoHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/analyze":
             query = parse_qs(parsed.query)
             currency = query.get("currency", ["usd"])[0]
-            top = int(query.get("top", ["50"])[0])
-            strategy_limit = int(query.get("strategy_limit", ["5"])[0])
+            top = int(query.get("top", ["200"])[0])
+            strategy_limit = int(query.get("strategy_limit", ["30"])[0])
             quote_asset = query.get("quote", ["usdt"])[0].upper()
             use_demo = query.get("demo", ["false"])[0].lower() == "true"
 
@@ -75,6 +75,7 @@ class CryptoHandler(BaseHTTPRequestHandler):
                 "ok": True,
                 "market_state": classify_market(pulse.total),
                 "quote_asset": quote_asset,
+                "analyzed_coins": len(coins),
                 "pulse": {
                     "trend": round(pulse.trend_score, 2),
                     "volatility": round(pulse.volatility_score, 2),
@@ -89,6 +90,7 @@ class CryptoHandler(BaseHTTPRequestHandler):
                         "name": p.name,
                         "side": p.side,
                         "confidence": round(p.confidence, 2),
+                        "confidence_reasons": p.confidence_reasons,
                         "entry": p.entry,
                         "sl": p.stop_loss,
                         "tp1": p.take_profit_1,
