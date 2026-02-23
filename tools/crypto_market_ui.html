@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Crypto AI Analyzer Pro</title>
+  <style>
+    :root { --bg:#0b1020; --card:#131a2f; --soft:#1a2442; --text:#edf2ff; --muted:#9eb0d6; --green:#19c37d; --red:#ff5a6f; --yellow:#f4c95d; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family:Inter,system-ui,sans-serif; background:radial-gradient(circle at top,#1a2550 0%,var(--bg) 45%); color:var(--text); min-height:100vh; }
+    .container { max-width:1240px; margin:0 auto; padding:24px; }
+    .title { font-size:32px; font-weight:800; }
+    .subtitle { color:var(--muted); margin:6px 0 18px; }
+    .panel { background:rgba(19,26,47,.95); border:1px solid #22315b; border-radius:16px; padding:16px; box-shadow:0 8px 30px rgba(0,0,0,.25); }
+    .controls { display:grid; grid-template-columns:repeat(6,minmax(120px,1fr)); gap:12px; align-items:end; }
+    label{font-size:12px;color:var(--muted);display:block;margin-bottom:6px}
+    input,select{width:100%;background:var(--soft);border:1px solid #2a3b6f;color:var(--text);border-radius:10px;padding:10px}
+    .btn{background:linear-gradient(90deg,#3478f6,#5e8cff);border:0;color:#fff;border-radius:10px;padding:11px 14px;font-weight:700;cursor:pointer}
+    .grid{margin-top:16px;display:grid;grid-template-columns:repeat(6,minmax(100px,1fr));gap:10px}
+    .metric{background:#111a33;border:1px solid #263764;border-radius:12px;padding:12px}
+    .metric .k{color:var(--muted);font-size:12px}.metric .v{font-size:20px;font-weight:800;margin-top:4px}
+    .state{font-weight:700;color:var(--yellow)}
+    .plans{margin-top:16px;display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px;max-height:70vh;overflow:auto;padding-right:4px}
+    .plan{background:#111a33;border:1px solid #263764;border-radius:14px;padding:14px}
+    .buy{border-left:4px solid var(--green)} .sell{border-left:4px solid var(--red)}
+    .row{margin:6px 0;color:#c9d6f7;font-size:14px}.row strong{color:#f3f7ff}
+    .badge{display:inline-block;padding:4px 8px;border-radius:999px;font-size:12px;font-weight:700;margin-left:8px}
+    .badge.buy{background:rgba(25,195,125,.18);color:#5bffba}.badge.sell{background:rgba(255,90,111,.18);color:#ff9aaa}
+    .badge.conf{background:rgba(110,168,254,.2);color:#b8d0ff}
+    ul.reason{margin:8px 0 0 16px;color:#c2d4ff;padding:0}
+    .hint{margin-top:10px;color:var(--muted);font-size:13px}.error{color:#ff9aaa;margin-top:10px}
+    @media (max-width:980px){.controls{grid-template-columns:1fr 1fr}.grid{grid-template-columns:1fr 1fr 1fr}}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="title">🚀 Crypto AI Analyzer Pro</div>
+    <div class="subtitle">Phân tích nhiều coin + xếp hạng confidence nâng cao + chiến lược Buy/Sell/SL/TP</div>
+    <div class="panel">
+      <div class="controls">
+        <div><label>Currency</label><input id="currency" value="usd" /></div>
+        <div><label>Pair Quote</label><input id="quote" value="usdt" /></div>
+        <div><label>Top Coin (max 1000)</label><input id="top" type="number" min="20" max="1000" value="300" /></div>
+        <div><label>Strategy Limit</label><input id="strategyLimit" type="number" min="5" max="300" value="120" /></div>
+        <div><label>Mode</label><select id="mode"><option value="demo">Demo (offline)</option><option value="live">Live API</option></select></div>
+        <button class="btn" id="runBtn">Phân tích chuyên sâu</button>
+      </div>
+      <div class="hint">Tip: Có thể set Top=1000 và Strategy Limit lớn để quét diện rộng. Nếu bị chặn API, dùng Demo mode.</div>
+      <div id="error" class="error"></div>
+      <div class="grid" id="metrics" style="display:none">
+        <div class="metric"><div class="k">Market State</div><div class="v state" id="marketState">-</div></div>
+        <div class="metric"><div class="k">Analyzed Coins</div><div class="v" id="analyzedCoins">-</div></div>
+        <div class="metric"><div class="k">Total Score</div><div class="v" id="total">-</div></div>
+        <div class="metric"><div class="k">Trend</div><div class="v" id="trend">-</div></div>
+        <div class="metric"><div class="k">Volatility</div><div class="v" id="volatility">-</div></div>
+        <div class="metric"><div class="k">Liquidity</div><div class="v" id="liquidity">-</div></div>
+      </div>
+      <div class="plans" id="plans"></div>
+    </div>
+  </div>
+  <script>
+    const runBtn=document.getElementById('runBtn'); const errorEl=document.getElementById('error'); const plansEl=document.getElementById('plans'); const metricsEl=document.getElementById('metrics');
+    const fmt=(n)=>Number(n).toLocaleString(undefined,{maximumFractionDigits:6});
+    function planCard(plan){
+      const sideClass=plan.side==='BUY'?'buy':'sell';
+      const reasons=(plan.confidence_reasons||[]).slice(0,3).map(r=>`<li>${r}</li>`).join('');
+      return `<div class="plan ${sideClass}">
+        <div><strong>${plan.name} (${plan.pair || plan.symbol})</strong><span class="badge ${sideClass}">${plan.side}</span><span class="badge conf">Conf ${plan.confidence}</span></div>
+        <div class="row">Entry: <strong>${fmt(plan.entry)}</strong></div>
+        <div class="row">SL: <strong>${fmt(plan.sl)}</strong></div>
+        <div class="row">TP1: <strong>${fmt(plan.tp1)}</strong> | TP2: <strong>${fmt(plan.tp2)}</strong></div>
+        <div class="row">R/R: <strong>${plan.rr1}R</strong> / <strong>${plan.rr2}R</strong></div>
+        <div class="row">Invalidation: ${plan.invalidation}</div>
+        <div class="row">Note: ${plan.note}</div>
+        <div class="row"><strong>Lý do confidence:</strong><ul class="reason">${reasons}</ul></div>
+      </div>`;
+    }
+    async function analyze(){
+      errorEl.textContent=''; plansEl.innerHTML=''; runBtn.disabled=true; runBtn.textContent='Đang quét nhiều coin...';
+      const currency=document.getElementById('currency').value||'usd';
+      const top=document.getElementById('top').value||'300';
+      const strategyLimit=document.getElementById('strategyLimit').value||'120';
+      const quote=document.getElementById('quote').value||'usdt';
+      const demo=document.getElementById('mode').value==='demo';
+      const qs=new URLSearchParams({currency,top,strategy_limit:strategyLimit,quote,demo:String(demo)});
+      try{
+        const res=await fetch(`/api/analyze?${qs.toString()}`); const data=await res.json(); if(!data.ok) throw new Error(data.error||'Unknown error');
+        metricsEl.style.display='grid';
+        document.getElementById('marketState').textContent=data.market_state;
+        document.getElementById('analyzedCoins').textContent=data.analyzed_coins;
+        document.getElementById('total').textContent=data.pulse.total;
+        document.getElementById('trend').textContent=data.pulse.trend;
+        document.getElementById('volatility').textContent=data.pulse.volatility;
+        document.getElementById('liquidity').textContent=data.pulse.liquidity;
+        plansEl.innerHTML=data.plans.map(planCard).join('');
+      }catch(e){ errorEl.textContent=`Lỗi: ${e.message}`; }
+      finally{ runBtn.disabled=false; runBtn.textContent='Phân tích chuyên sâu'; }
+    }
+    runBtn.addEventListener('click', analyze); analyze();
+  </script>
+</body>
+</html>

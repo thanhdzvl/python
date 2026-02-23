@@ -181,3 +181,46 @@
 - [Million Requests per Second with Python](https://medium.freecodecamp.com/million-requests-per-second-with-python-95c137af319)
 - [Yes, Python is Slow, and I Don't Care](https://hackernoon.com/yes-python-is-slow-and-i-dont-care-13763980b5a1)
 - [Memoization in Python](https://dbader.org/blog/python-memoization)
+
+## 🧠 Auto phân tích thị trường Crypto (mẫu)
+
+Đã thêm script mẫu: `tools/crypto_market_agent.py` để tạo báo cáo thị trường crypto tự động, gồm:
+- Điểm xu hướng thị trường (trend, volatility, liquidity, breadth)
+- Top coin tăng/giảm 24h
+- Chiến lược BUY/SELL đầy đủ: Entry, Stop-loss (SL), Take-profit (TP1/TP2), Risk/Reward
+- Gợi ý quản trị vốn
+
+Chạy nhanh:
+
+```bash
+# chạy dữ liệu real-time (cần internet)
+python3 tools/crypto_market_agent.py --currency usd --top 500 --strategy-limit 120 --quote usdt
+
+# xuất JSON để tích hợp bot/dashboard
+python3 tools/crypto_market_agent.py --currency vnd --top 100 --output json
+
+# chạy offline bằng dữ liệu mẫu
+python3 tools/crypto_market_agent.py --demo --strategy-limit 3 --quote usdt
+```
+
+> Lưu ý: Đây là công cụ phân tích tham khảo, không phải lời khuyên đầu tư.
+
+
+### Web GUI đẹp (local)
+
+Bạn có thể chạy giao diện web trực quan:
+
+```bash
+python3 tools/crypto_market_web.py --host 0.0.0.0 --port 8765
+```
+
+Mở trình duyệt tại: `http://localhost:8765`
+
+GUI hỗ trợ:
+- Form tối ưu cho phân tích diện rộng với Top Coin lớn
+- Chọn Demo mode (offline) hoặc Live API
+- Xem nhanh Market State + score
+- Quét cực nhiều coin (tối đa 1000) và xếp hạng theo confidence
+- Card chiến lược theo cặp (ví dụ BTC/USDT): Buy/Sell, Entry, SL, TP1/TP2, RR + lý do confidence
+- Confidence AI scoring (logistic-style) với nhiều yếu tố để tránh lý do lặp lại
+
