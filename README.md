@@ -222,4 +222,5 @@ GUI hỗ trợ:
 - Xem nhanh Market State + score
 - Quét cực nhiều coin (tối đa 1000) và xếp hạng theo confidence
 - Card chiến lược theo cặp (ví dụ BTC/USDT): Buy/Sell, Entry, SL, TP1/TP2, RR + lý do confidence
+- Confidence AI scoring (logistic-style) với nhiều yếu tố để tránh lý do lặp lại
 

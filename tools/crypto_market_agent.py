@@ -2,9 +2,9 @@
 """Auto phân tích thị trường crypto (CLI) với chiến lược BUY/SELL + SL/TP.
 
 Nâng cấp:
-- Hỗ trợ quét rất nhiều coin bằng phân trang (nhiều page CoinGecko).
-- Confidence score chi tiết hơn (trend alignment, liquidity, volatility regime, market regime).
-- Xuất lý do confidence để người dùng hiểu vì sao tín hiệu mạnh/yếu.
+- Quét rất nhiều coin bằng phân trang CoinGecko (tối đa 1000).
+- Confidence model dạng "AI scoring" (xấp xỉ logistic) với nhiều đặc trưng thị trường.
+- Trả về confidence_reasons đa dạng theo đóng góp thực tế của từng yếu tố.
 """
 
 from __future__ import annotations
@@ -15,7 +15,6 @@ import json
 import math
 import statistics
 import sys
-import textwrap
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -52,6 +51,20 @@ class MarketPulse:
 
 
 @dataclass
+class MarketContext:
+    momentum_mean: float
+    momentum_std: float
+    trend_mean: float
+    trend_std: float
+    liq_mean: float
+    liq_std: float
+    vol_mean: float
+    vol_std: float
+    rank_mean: float
+    rank_std: float
+
+
+@dataclass
 class TradePlan:
     symbol: str
     name: str
@@ -72,16 +85,26 @@ def clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
 
 
+def sigmoid(x: float) -> float:
+    x = clamp(x, -20, 20)
+    return 1 / (1 + math.exp(-x))
+
+
+def safe_zscore(value: float, mean: float, std: float) -> float:
+    if std < 1e-9:
+        return 0.0
+    return (value - mean) / std
+
+
 def get_json(url: str, params: dict[str, Any] | None = None) -> Any:
     if params:
         url = f"{url}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers={"accept": "application/json", "user-agent": "crypto-market-agent/3.0"})
+    req = urllib.request.Request(url, headers={"accept": "application/json", "user-agent": "crypto-market-agent/4.0"})
     with urllib.request.urlopen(req, timeout=30) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
 def demo_market_data() -> list[CoinSnapshot]:
-    # Dữ liệu demo mở rộng để test UI nhiều coin.
     base = [
         CoinSnapshot("BTC", "Bitcoin", 95000, 1.85e12, 1, 2.3, 8.5, 4.1e10),
         CoinSnapshot("ETH", "Ethereum", 5100, 6.4e11, 2, 1.8, 7.2, 2.5e10),
@@ -96,11 +119,11 @@ def demo_market_data() -> list[CoinSnapshot]:
     ]
     synthetic: list[CoinSnapshot] = []
     for i in range(11, 221):
-        ch24 = ((i % 13) - 6) * 0.7
-        ch7 = ((i % 17) - 8) * 1.2
+        ch24 = ((i % 13) - 6) * 0.7 + ((i % 5) - 2) * 0.2
+        ch7 = ((i % 17) - 8) * 1.1 + ((i % 7) - 3) * 0.5
         price = max(0.02, 20 - i * 0.05)
         mcap = max(5e7, 4e9 - i * 1.6e7)
-        vol = max(8e6, 6e8 - i * 2e6)
+        vol = max(8e6, 8e8 - i * 2.3e6)
         synthetic.append(CoinSnapshot(f"ALT{i}", f"Altcoin {i}", price, mcap, i, ch24, ch7, vol))
     return base + synthetic
 
@@ -204,60 +227,82 @@ def signal_side(coin: CoinSnapshot, pulse: MarketPulse) -> str:
     return "BUY"
 
 
-def confidence_engine(coin: CoinSnapshot, pulse: MarketPulse, side: str) -> tuple[float, list[str]]:
-    reasons: list[str] = []
-    score = 50.0
+def build_market_context(coins: list[CoinSnapshot]) -> MarketContext:
+    if not coins:
+        return MarketContext(0, 1, 0, 1, 0, 1, 0, 1, 0, 1)
 
-    trend_align = coin.price_change_7d_pct >= 0 if side == "BUY" else coin.price_change_7d_pct < 0
-    if trend_align:
-        score += 10
-        reasons.append("Trend 7d đồng thuận với hướng lệnh (+10)")
-    else:
-        score -= 8
-        reasons.append("Trend 7d chưa đồng thuận với hướng lệnh (-8)")
+    momentum = [c.price_change_24h_pct for c in coins]
+    trend = [c.price_change_7d_pct for c in coins]
+    liq = [c.volume_24h / max(c.market_cap, 1) for c in coins]
+    vol = [volatility_proxy(c) for c in coins]
+    max_rank = max((c.market_cap_rank or len(coins)) for c in coins)
+    rank_quality = [1 - ((c.market_cap_rank or max_rank) - 1) / max(1, max_rank - 1) for c in coins]
 
-    intraday_align = coin.price_change_24h_pct >= 0 if side == "BUY" else coin.price_change_24h_pct < 0
-    if intraday_align:
-        score += 8
-        reasons.append("Momentum 24h ủng hộ setup (+8)")
-    else:
-        score -= 7
-        reasons.append("Momentum 24h đi ngược setup (-7)")
+    def s(values: list[float]) -> tuple[float, float]:
+        return statistics.fmean(values), max(statistics.pstdev(values), 1e-9)
 
-    if pulse.total >= 60 and side == "BUY":
-        score += 8
-        reasons.append("Market regime tích cực cho vị thế BUY (+8)")
-    elif pulse.total <= 45 and side == "SELL":
-        score += 8
-        reasons.append("Market regime tiêu cực cho vị thế SELL (+8)")
-    else:
-        score -= 2
-        reasons.append("Market regime trung tính/không tối ưu (-2)")
+    mom_m, mom_s = s(momentum)
+    tr_m, tr_s = s(trend)
+    liq_m, liq_s = s(liq)
+    vol_m, vol_s = s(vol)
+    rank_m, rank_s = s(rank_quality)
+    return MarketContext(mom_m, mom_s, tr_m, tr_s, liq_m, liq_s, vol_m, vol_s, rank_m, rank_s)
 
-    vol_ratio = coin.volume_24h / max(coin.market_cap, 1)
-    if vol_ratio > 0.08:
-        score += 7
-        reasons.append("Thanh khoản tương đối cao, khớp lệnh tốt (+7)")
-    elif vol_ratio < 0.01:
-        score -= 6
-        reasons.append("Thanh khoản thấp, rủi ro trượt giá (-6)")
 
+def confidence_engine(coin: CoinSnapshot, pulse: MarketPulse, side: str, ctx: MarketContext) -> tuple[float, list[str]]:
+    rel_liq = coin.volume_24h / max(coin.market_cap, 1)
     vol = volatility_proxy(coin)
-    if vol <= 4:
-        score += 5
-        reasons.append("Biến động vừa phải, dễ quản trị SL (+5)")
-    elif vol >= 10:
-        score -= 5
-        reasons.append("Biến động cao, xác suất quét SL lớn (-5)")
+    rank_quality = 1 - ((coin.market_cap_rank or 1000) - 1) / 999
 
-    if (coin.market_cap_rank or 9999) <= 30:
-        score += 4
-        reasons.append("Coin vốn hóa lớn, độ ổn định tương đối tốt (+4)")
+    sign = 1 if side == "BUY" else -1
+    factors = {
+        "trend": sign * safe_zscore(coin.price_change_7d_pct, ctx.trend_mean, ctx.trend_std),
+        "momentum": sign * safe_zscore(coin.price_change_24h_pct, ctx.momentum_mean, ctx.momentum_std),
+        "liquidity": safe_zscore(rel_liq, ctx.liq_mean, ctx.liq_std),
+        "stability": -safe_zscore(vol, ctx.vol_mean, ctx.vol_std),
+        "rank_quality": safe_zscore(rank_quality, ctx.rank_mean, ctx.rank_std),
+        "market_regime": ((pulse.total - 50) / 10.0) * sign,
+    }
 
-    return clamp(score, 15, 95), reasons
+    weights = {
+        "trend": 0.90,
+        "momentum": 0.75,
+        "liquidity": 0.60,
+        "stability": 0.45,
+        "rank_quality": 0.40,
+        "market_regime": 0.50,
+    }
+
+    linear = -0.15
+    contributions: dict[str, float] = {}
+    for k, v in factors.items():
+        c = v * weights[k]
+        contributions[k] = c
+        linear += c
+
+    probability = sigmoid(linear)
+    confidence = clamp(10 + 85 * probability, 10, 95)
+
+    templates = {
+        "trend": ("Xu hướng 7d đồng pha với lệnh", "Xu hướng 7d đi ngược lệnh"),
+        "momentum": ("Momentum 24h đang ủng hộ entry", "Momentum 24h yếu/đi ngược"),
+        "liquidity": ("Thanh khoản tương đối mạnh", "Thanh khoản thấp, dễ trượt giá"),
+        "stability": ("Biến động trong vùng dễ quản trị", "Biến động lớn, rủi ro quét SL cao"),
+        "rank_quality": ("Vị thế vốn hóa tốt trong market", "Vốn hóa thấp hơn mặt bằng ưu tiên"),
+        "market_regime": ("Market regime phù hợp hướng lệnh", "Market regime chưa ủng hộ hướng lệnh"),
+    }
+
+    top = sorted(contributions.items(), key=lambda kv: abs(kv[1]), reverse=True)[:4]
+    reasons: list[str] = []
+    for key, contribution in top:
+        pos_msg, neg_msg = templates[key]
+        msg = pos_msg if contribution >= 0 else neg_msg
+        reasons.append(f"{msg} ({contribution:+.2f})")
+
+    return confidence, reasons
 
 
-def build_trade_plan(coin: CoinSnapshot, pulse: MarketPulse) -> TradePlan:
+def build_trade_plan(coin: CoinSnapshot, pulse: MarketPulse, ctx: MarketContext) -> TradePlan:
     side = signal_side(coin, pulse)
     vol = volatility_proxy(coin)
     vol_factor = clamp(vol / 100, 0.015, 0.16)
@@ -280,7 +325,7 @@ def build_trade_plan(coin: CoinSnapshot, pulse: MarketPulse) -> TradePlan:
     risk = abs(entry - stop_loss)
     rr1 = abs(take_profit_1 - entry) / risk if risk else 0.0
     rr2 = abs(take_profit_2 - entry) / risk if risk else 0.0
-    confidence, reasons = confidence_engine(coin, pulse, side)
+    confidence, reasons = confidence_engine(coin, pulse, side, ctx)
 
     return TradePlan(
         symbol=coin.symbol,
@@ -300,10 +345,12 @@ def build_trade_plan(coin: CoinSnapshot, pulse: MarketPulse) -> TradePlan:
 
 
 def generate_trade_plans(coins: list[CoinSnapshot], pulse: MarketPulse, limit: int) -> list[TradePlan]:
+    candidate_limit = max(limit * 6, 180)
     ranked = sorted(coins, key=lambda c: (c.market_cap_rank or 9999, -c.volume_24h))
-    selected = ranked[: max(1, limit)]
-    plans = [build_trade_plan(c, pulse) for c in selected]
-    return sorted(plans, key=lambda p: p.confidence, reverse=True)
+    selected = ranked[: min(len(ranked), candidate_limit)]
+    ctx = build_market_context(coins)
+    plans = [build_trade_plan(c, pulse, ctx) for c in selected]
+    return sorted(plans, key=lambda p: p.confidence, reverse=True)[: max(1, limit)]
 
 
 def format_coin_line(coin: CoinSnapshot, currency: str, quote_asset: str) -> str:
@@ -348,7 +395,7 @@ def generate_report(coins: list[CoinSnapshot], currency: str, strategy_limit: in
         lines.append(format_coin_line(c, currency, quote_asset))
     lines.append("")
 
-    lines.append("## Chiến lược BUY/SELL + SL/TP (xếp hạng theo confidence)")
+    lines.append("## Chiến lược BUY/SELL + SL/TP (xếp hạng theo confidence AI)")
     for idx, plan in enumerate(plans, start=1):
         lines.append(f"### {idx}) {plan.name} ({plan.symbol}/{quote_asset.upper()}) — {plan.side} | Confidence: {plan.confidence:.1f}/100")
         lines.append(f"- Entry tham chiếu: **{fmt_price(plan.entry)} {currency.upper()}**")
