@@ -53,6 +53,7 @@ class CryptoHandler(BaseHTTPRequestHandler):
             currency = query.get("currency", ["usd"])[0]
             top = int(query.get("top", ["50"])[0])
             strategy_limit = int(query.get("strategy_limit", ["5"])[0])
+            quote_asset = query.get("quote", ["usdt"])[0].upper()
             use_demo = query.get("demo", ["false"])[0].lower() == "true"
 
             try:
@@ -73,6 +74,7 @@ class CryptoHandler(BaseHTTPRequestHandler):
             data = {
                 "ok": True,
                 "market_state": classify_market(pulse.total),
+                "quote_asset": quote_asset,
                 "pulse": {
                     "trend": round(pulse.trend_score, 2),
                     "volatility": round(pulse.volatility_score, 2),
@@ -83,6 +85,7 @@ class CryptoHandler(BaseHTTPRequestHandler):
                 "plans": [
                     {
                         "symbol": p.symbol,
+                        "pair": f"{p.symbol}/{quote_asset}",
                         "name": p.name,
                         "side": p.side,
                         "confidence": round(p.confidence, 2),

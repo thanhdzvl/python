@@ -194,13 +194,13 @@ Chạy nhanh:
 
 ```bash
 # chạy dữ liệu real-time (cần internet)
-python3 tools/crypto_market_agent.py --currency usd --top 50 --strategy-limit 5
+python3 tools/crypto_market_agent.py --currency usd --top 50 --strategy-limit 5 --quote usdt
 
 # xuất JSON để tích hợp bot/dashboard
 python3 tools/crypto_market_agent.py --currency vnd --top 100 --output json
 
 # chạy offline bằng dữ liệu mẫu
-python3 tools/crypto_market_agent.py --demo --strategy-limit 3
+python3 tools/crypto_market_agent.py --demo --strategy-limit 3 --quote usdt
 ```
 
 > Lưu ý: Đây là công cụ phân tích tham khảo, không phải lời khuyên đầu tư.
@@ -219,5 +219,5 @@ Mở trình duyệt tại: `http://localhost:8765`
 GUI hỗ trợ:
 - Chọn Demo mode (offline) hoặc Live API
 - Xem nhanh Market State + score
-- Card chiến lược cho từng coin: Buy/Sell, Entry, SL, TP1/TP2, RR
+- Card chiến lược theo cặp (ví dụ BTC/USDT): Buy/Sell, Entry, SL, TP1/TP2, RR
 

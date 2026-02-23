@@ -233,9 +233,9 @@ def generate_trade_plans(coins: list[CoinSnapshot], pulse: MarketPulse, limit: i
     return [build_trade_plan(c, pulse) for c in selected]
 
 
-def format_coin_line(coin: CoinSnapshot, currency: str) -> str:
+def format_coin_line(coin: CoinSnapshot, currency: str, quote_asset: str) -> str:
     return (
-        f"- {coin.name} ({coin.symbol}) | "
+        f"- {coin.name} ({coin.symbol}/{quote_asset.upper()}) | "
         f"Giá: {coin.current_price:,.4f} {currency.upper()} | "
         f"24h: {coin.price_change_24h_pct:+.2f}% | "
         f"7d: {coin.price_change_7d_pct:+.2f}%"
@@ -246,7 +246,7 @@ def fmt_price(v: float) -> str:
     return f"{v:,.6f}".rstrip("0").rstrip(".")
 
 
-def generate_report(coins: list[CoinSnapshot], currency: str, strategy_limit: int) -> str:
+def generate_report(coins: list[CoinSnapshot], currency: str, strategy_limit: int, quote_asset: str) -> str:
     pulse = compute_pulse(coins)
     gainers, losers = top_movers(coins)
     plans = generate_trade_plans(coins, pulse, strategy_limit)
@@ -266,17 +266,17 @@ def generate_report(coins: list[CoinSnapshot], currency: str, strategy_limit: in
 
     lines.append("## Top tăng 24h")
     for c in gainers:
-        lines.append(format_coin_line(c, currency))
+        lines.append(format_coin_line(c, currency, quote_asset))
     lines.append("")
 
     lines.append("## Top giảm 24h")
     for c in losers:
-        lines.append(format_coin_line(c, currency))
+        lines.append(format_coin_line(c, currency, quote_asset))
     lines.append("")
 
     lines.append("## Chiến lược BUY/SELL + SL/TP (tự động)")
     for idx, plan in enumerate(plans, start=1):
-        lines.append(f"### {idx}) {plan.name} ({plan.symbol}) — {plan.side} | Confidence: {plan.confidence:.1f}/100")
+        lines.append(f"### {idx}) {plan.name} ({plan.symbol}/{quote_asset.upper()}) — {plan.side} | Confidence: {plan.confidence:.1f}/100")
         lines.append(f"- Entry tham chiếu: **{fmt_price(plan.entry)} {currency.upper()}**")
         lines.append(f"- Stop-loss (SL): **{fmt_price(plan.stop_loss)} {currency.upper()}**")
         lines.append(
@@ -302,6 +302,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--top", type=int, default=50, help="Số lượng coin top market cap để phân tích")
     parser.add_argument("--strategy-limit", type=int, default=5, help="Số coin xuất chiến lược giao dịch")
     parser.add_argument("--output", choices=["markdown", "json"], default="markdown", help="Định dạng đầu ra")
+    parser.add_argument("--quote", default="usdt", help="Quote asset hiển thị cặp giao dịch, ví dụ: usdt")
     parser.add_argument("--demo", action="store_true", help="Dùng dữ liệu mẫu offline (không gọi API)")
     return parser.parse_args()
 
@@ -323,13 +324,14 @@ def main() -> int:
             "generated_at": dt.datetime.utcnow().isoformat() + "Z",
             "currency": args.currency,
             "market_state": classify_market(pulse.total),
+            "quote_asset": args.quote.upper(),
             "pulse": asdict(pulse),
             "trade_plans": [asdict(p) for p in plans],
             "coins": [asdict(c) for c in coins],
         }
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
-        print(generate_report(coins, args.currency, args.strategy_limit))
+        print(generate_report(coins, args.currency, args.strategy_limit, args.quote))
     return 0
 
 

@@ -54,7 +54,7 @@
 
     .controls {
       display: grid;
-      grid-template-columns: repeat(5, minmax(120px, 1fr));
+      grid-template-columns: repeat(6, minmax(120px, 1fr));
       gap: 12px;
       align-items: end;
     }
@@ -152,6 +152,10 @@
           <input id="currency" value="usd" />
         </div>
         <div>
+          <label>Pair Quote</label>
+          <input id="quote" value="usdt" />
+        </div>
+        <div>
           <label>Top Coin</label>
           <input id="top" type="number" min="5" max="250" value="50" />
         </div>
@@ -199,7 +203,7 @@
       return `
       <div class="plan ${sideClass}">
         <div>
-          <strong>${plan.name} (${plan.symbol})</strong>
+          <strong>${plan.name} (${plan.pair || plan.symbol})</strong>
           <span class="badge ${sideClass}">${plan.side}</span>
         </div>
         <div class="row">Confidence: <strong>${plan.confidence}/100</strong></div>
@@ -221,12 +225,14 @@
       const currency = document.getElementById('currency').value || 'usd';
       const top = document.getElementById('top').value || '50';
       const strategyLimit = document.getElementById('strategyLimit').value || '5';
+      const quote = document.getElementById('quote').value || 'usdt';
       const demo = document.getElementById('mode').value === 'demo';
 
       const qs = new URLSearchParams({
         currency,
         top,
         strategy_limit: strategyLimit,
+        quote,
         demo: String(demo),
       });
 
